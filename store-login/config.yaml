@@ -1,5 +1,5 @@
 name: Store Login
-version: "0.1.0"
+version: "1.0.0"
 slug: store_login
 description: Log in to your stores (Albert Heijn, Jumbo, Lidl) inside Home Assistant and get a refresh token for the Store Receipts integration
 url: https://github.com/Xornop/ha-apps
