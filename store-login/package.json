@@ -1,0 +1,11 @@
+{
+  "name": "store-login",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "1.49.1",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Store Login</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1c1c1c; --card:#f0f0f0; --accent:#00a0e2; --err:#c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1c; --fg:#eee; --card:#2b2b2b; --err:#ef7a7a; } }
+  body { margin:0 auto; padding:12px; max-width:480px; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui, sans-serif; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:6px 0; }
+  button { font:inherit; padding:9px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.sec { background:var(--card); color:var(--fg); }
+  input[type=text], input[type=password], textarea { font:inherit; width:100%; box-sizing:border-box; padding:9px; border-radius:8px; border:1px solid #8886; background:var(--card); color:var(--fg); }
+  #wrap { position:relative; }
+  #screen { width:100%; display:block; border-radius:10px; outline:1px solid #8886; touch-action:none; user-select:none; background:var(--card); }
+  #live { position:absolute; left:0; top:0; width:1px; height:1px; opacity:0; border:0; padding:0; font-size:16px; pointer-events:none; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  #status { color:#888; min-height:1.4em; }
+  #error { color:var(--err); }
+  .hidden { display:none; }
+  textarea { height:110px; word-break:break-all; }
+  details { margin-top:10px; font-size:13px; color:#888; }
+</style>
+</head>
+<body>
+  <h1 data-i18n="title"></h1>
+  <p id="intro" data-i18n="intro"></p>
+  <p id="status"></p>
+  <p id="error"></p>
+
+  <div id="startBox" class="row"></div>
+
+  <div id="browser" class="hidden">
+    <div id="wrap">
+      <img id="screen" data-i18n-alt="screen_alt" draggable="false">
+      <input id="live" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-aria="keyboard">
+    </div>
+    <div class="row">
+      <button id="back" class="sec" data-i18n="back"></button>
+      <button id="kb" class="sec"></button>
+      <button id="clear" class="sec" data-i18n="clear"></button>
+      <button id="stop" class="sec" data-i18n="stop"></button>
+    </div>
+    <p style="font-size:13px;color:#888" data-i18n="hint"></p>
+
+    <details>
+      <summary data-i18n="alt_summary"></summary>
+      <input id="txt" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-ph="txt_ph" style="margin-top:6px">
+      <label><input id="pw" type="checkbox"> <span data-i18n="pw"></span></label>
+      <div class="row">
+        <button id="type" data-i18n="type"></button>
+        <button id="typeEnter" data-i18n="type_enter"></button>
+      </div>
+    </details>
+  </div>
+
+  <div id="result" class="hidden">
+    <p data-i18n-html="result_html"></p>
+    <textarea id="token" readonly></textarea>
+    <div class="row">
+      <button id="copy" data-i18n="copy"></button>
+      <button id="again" class="sec" data-i18n="back"></button>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// Texts live in translations/<lang>.json (nl, en); English is the base, a missing text shows its key
+const LANG = (navigator.language || 'en').toLowerCase().startsWith('nl') ? 'nl' : 'en';
+let dict = {};
+const T = new Proxy({}, { get: (_, key) => (key in dict ? dict[key] : String(key)) });
+async function loadTranslations() {
+  const get = (code) => fetch(`translations/${code}.json`).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+  const [en, local] = await Promise.all([get('en'), LANG === 'en' ? {} : get(LANG)]);
+  dict = { ...en, ...local };
+  applyI18n();
+}
+const fmt = (str, params) => str.replace(/\{(\w+)\}/g, (_, k) => (params[k] !== undefined ? params[k] : ''));
+// Server messages arrive as {key, ...params}; fall back to plain text
+const tr = (m) => (m.key && dict[m.key] ? fmt(dict[m.key], m) : m.text || '');
+
+function applyI18n() {
+  document.documentElement.lang = LANG;
+  document.title = T.title;
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = T[el.dataset.i18n]; });
+  document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = T[el.dataset.i18nHtml]; });
+  document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = T[el.dataset.i18nPh]; });
+  document.querySelectorAll('[data-i18n-alt]').forEach((el) => { el.alt = T[el.dataset.i18nAlt]; });
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', T[el.dataset.i18nAria]); });
+  $('kb').textContent = T.kb_auto;
+}
+let ws = null, meta = { w: 420, h: 740, top: 0 }, lastUrl = null, kbAuto = true;
+
+function setStatus(t) { $('status').textContent = t || ''; }
+function setError(t) { $('error').textContent = t || ''; }
+function show(which) {
+  $('startBox').classList.toggle('hidden', which !== 'start');
+  $('browser').classList.toggle('hidden', which !== 'browser');
+  $('result').classList.toggle('hidden', which !== 'result');
+  $('intro').classList.toggle('hidden', which === 'result');
+}
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function connect(onOpen) {
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+  ws = new WebSocket(proto + location.host + base + 'ws');
+  ws.binaryType = 'blob';
+  ws.onopen = onOpen;
+  ws.onmessage = (e) => {
+    if (typeof e.data !== 'string') {
+      const url = URL.createObjectURL(e.data);
+      const old = lastUrl;
+      $('screen').src = url;
+      lastUrl = url;
+      if (old) setTimeout(() => URL.revokeObjectURL(old), 500);
+      return;
+    }
+    const m = JSON.parse(e.data);
+    if (m.t === 'status') setStatus(tr(m));
+    else if (m.t === 'meta') { meta = { w: m.width, h: m.height, top: m.top }; }
+    else if (m.t === 'ready') { setStatus(''); show('browser'); }
+    else if (m.t === 'editable') {
+      // The server tells us whether the tap landed in a text field
+      if (kbAuto) { if (m.value) focusLive(); else live.blur(); }
+    }
+    else if (m.t === 'done') { $('token').value = m.refresh_token; setStatus(''); live.blur(); show('result'); }
+    else if (m.t === 'error') { setError(tr(m)); setStatus(''); live.blur(); show('start'); }
+  };
+  ws.onclose = () => {
+    if (!$('result').classList.contains('hidden')) return;
+    setStatus(T.disconnected);
+    live.blur();
+    show('start');
+  };
+}
+
+function startLogin(provider) {
+  setError(''); setStatus(T.connecting);
+  $('provName').textContent = provider.name;
+  connect(() => send({ t: 'start', provider: provider.key }));
+}
+
+// Build one login button per store, as listed by the server
+loadTranslations().then(() => fetch('providers')).then((r) => r.json()).then((list) => {
+  list.forEach((p) => {
+    const b = document.createElement('button');
+    b.textContent = fmt(T.login_to, { name: p.name });
+    b.onclick = () => startLogin(p);
+    $('startBox').appendChild(b);
+  });
+}).catch(() => setError(T.load_failed));
+
+$('stop').onclick = () => { send({ t: 'stop' }); if (ws) ws.close(); setStatus(''); live.blur(); show('start'); };
+
+// Tap / drag on the remote screen
+const img = $('screen');
+let down = null;
+img.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; img.setPointerCapture(e.pointerId); });
+img.addEventListener('pointerup', (e) => {
+  if (!down) return;
+  const r = img.getBoundingClientRect();
+  const dx = e.clientX - down.x, dy = e.clientY - down.y;
+  const zoom = r.width / meta.w;
+  if (Math.abs(dx) > 12 || Math.abs(dy) > 12) {
+    send({ t: 'scroll', dy: -dy / zoom });
+  } else {
+    send({ t: 'tap', x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom - meta.top });
+    // Focus inside the tap gesture so phones open the keyboard; the server then tells us to keep or drop it
+    if (kbAuto) focusLive();
+  }
+  down = null;
+});
+img.addEventListener('click', () => { if (kbAuto) focusLive(); });
+
+// Direct typing: a hidden input forwards every keystroke
+const live = $('live');
+const SENT = '\u200b';
+let composing = false;
+function resetLive() {
+  live.value = SENT;
+  try { live.setSelectionRange(1, 1); } catch { /* ignore */ }
+}
+function focusLive() { resetLive(); live.focus({ preventScroll: true }); }
+
+$('kb').onclick = () => {
+  kbAuto = !kbAuto;
+  $('kb').textContent = kbAuto ? T.kb_auto : T.kb_off;
+  if (!kbAuto) live.blur();
+};
+
+function flushLive() {
+  const v = live.value;
+  if (v.startsWith(SENT)) {
+    const t = v.slice(1);
+    if (t) send({ t: 'text', value: t });
+  } else if (v) {
+    send({ t: 'text', value: v });
+  } else {
+    send({ t: 'key', key: 'Backspace' });
+  }
+  resetLive();
+}
+live.addEventListener('compositionstart', () => { composing = true; });
+live.addEventListener('compositionend', () => { composing = false; flushLive(); });
+live.addEventListener('input', () => { if (!composing) flushLive(); });
+const SPECIAL = ['Enter', 'Tab', 'Escape', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+live.addEventListener('keydown', (e) => {
+  if (SPECIAL.includes(e.key)) { e.preventDefault(); send({ t: 'key', key: e.key }); }
+});
+live.addEventListener('paste', (e) => {
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if (text) send({ t: 'text', value: text });
+});
+
+// Typing via text box (fallback)
+$('pw').onchange = () => { $('txt').type = $('pw').checked ? 'password' : 'text'; };
+function typeText(enter) {
+  const v = $('txt').value;
+  if (!v) { if (enter) send({ t: 'key', key: 'Enter' }); return; }
+  send({ t: 'text', value: v, enter });
+  $('txt').value = '';
+}
+$('type').onclick = () => typeText(false);
+$('typeEnter').onclick = () => typeText(true);
+$('clear').onclick = () => send({ t: 'clear' });
+$('back').onclick = () => send({ t: 'back' });
+
+// Back to the store list after copying the token (e.g. to log in to another store)
+$('again').onclick = () => {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  $('token').value = '';
+  $('copy').textContent = T.copy;
+  setStatus(''); setError('');
+  show('start');
+};
+
+// Copy token
+$('copy').onclick = async () => {
+  const t = $('token');
+  t.select();
+  try { await navigator.clipboard.writeText(t.value); } catch { document.execCommand('copy'); }
+  $('copy').textContent = T.copied;
+};
+</script>
+</body>
+</html>
