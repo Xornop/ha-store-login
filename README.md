@@ -1,4 +1,4 @@
-# HA Store Login
+# Store Login
 
 Home Assistant app that lets you log in to a supermarket **in a browser inside Home Assistant** and gives you the token that the **Store Receipts** integration needs.
 
